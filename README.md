@@ -48,22 +48,19 @@ Follow these steps to get your Poké Ball Plus working on your PC.
 
 ### Installation & Setup Guide
 
-1.  **Download the Application**
-    *   Grab the latest version from the **[Releases Page](https://github.com/rna0/pokeball-plus-4-windows/releases)**.
+1.  **Prepare Your System**
+    *   **Download the Application**: Grab the latest `PokeballPlus4Windows.zip` from the **[Releases Page](https://github.com/rna0/pokeball-plus-4-windows/releases)**.
+    *   **Install ViGEmBus Driver**: If you haven't already, download and install the latest driver from the official [**ViGEmBus Releases Page**](https://github.com/nefarius/ViGEmBus/releases). This is a one-time setup.
+    *   **Remove Old Pairings**: Go to your Windows Bluetooth settings and remove any existing "Pokemon PBP" devices to ensure a clean connection.
 
-2.  **Install the ViGEmBus Driver**
-    *   This project requires the ViGEmBus driver to create a virtual X-Input controller.
-    *   Download and run the latest installer from the official [**ViGEmBus Releases Page**](https://github.com/nefarius/ViGEmBus/releases).
+2.  **Run the Application**
+    *   Unzip the downloaded file.
+    *   Run `PokeballPlus4Windows.exe`. The application will start and run quietly in your system tray.
 
-3.  **Pair Your Poké Ball Plus**
-    *   Open the Windows Bluetooth settings (`Settings` -> `Bluetooth & devices` -> `Add device`).
-    *   Press and hold the **joystick button** on your Poké Ball Plus until it starts to vibrate and the light flashes white.
-    *   Select the "Poké Ball Plus" from the list of available devices to pair it with your PC.
-
-4.  **Run the Application**
-    *   Unzip the `PokeballPlus4Windows` file you downloaded in Step 1.
-    *   Run `PokeballPlus4Windows.exe`.
-    *   The application will start in your system tray. It will automatically scan for, connect to, and map your paired Poké Ball Plus.
+3.  **Connect Your Poké Ball Plus**
+    *   Press the **top button** on your Poké Ball Plus. The light will start blinking white, indicating it's in pairing mode.
+    *   The application will automatically detect and connect to the controller.
+    *   You'll know it's successfully connected when the **white light on the controller turns off**.
 
 Your controller is now ready! It will be recognized by Windows and games as a standard X-Input controller.
 
