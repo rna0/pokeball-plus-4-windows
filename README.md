@@ -3,6 +3,7 @@
 A lightweight Windows utility that allows you to use your Nintendo Poké Ball Plus controller as a standard X-Input device on your PC.
 
 ![Poké Ball Plus Controller](https://github.com/user-attachments/assets/4568f462-1f7e-49bf-8076-8054346140be)
+![Program Screenshot](https://github.com/user-attachments/assets/2288f9ec-c3c8-49e4-a19a-4e3b48ad7d4e)
 
 ## Features
 
