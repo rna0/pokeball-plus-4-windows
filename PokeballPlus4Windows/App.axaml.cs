@@ -32,7 +32,7 @@ public class App : Application
             _trayIcon = new TrayIcon
             {
                 Icon = new WindowIcon(
-                    AssetLoader.Open(new Uri("avares://PokeballPlus4Windows/Assets/PokeBallPlus.ico"))),
+                    AssetLoader.Open(new Uri("avares://PokeballPlus4Windows/Assets/favicon.ico"))),
                 ToolTipText = "Poké Ball Driver",
                 IsVisible = true
             };

@@ -3,6 +3,7 @@
         <OutputType>WinExe</OutputType>
         <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
         <Nullable>enable</Nullable>
+        <ApplicationIcon>Assets\favicon.ico</ApplicationIcon>
         <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
         <ApplicationManifest>app.manifest</ApplicationManifest>
         <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
@@ -22,7 +23,6 @@
     </ItemGroup>
 
     <ItemGroup>
-      <None Remove="Assets\PokeBallPlus.ico" />
-      <AvaloniaResource Include="Assets\PokeBallPlus.ico" />
+      <AvaloniaResource Include="Assets\**" />
     </ItemGroup>
 </Project>
