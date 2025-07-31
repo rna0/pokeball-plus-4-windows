@@ -120,7 +120,7 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
     {
         ParseAndForwardInput(args.CharacteristicValue.ToArray());
     }
-    
+
     private void OnBatteryValueChanged(GattCharacteristic? sender, GattValueChangedEventArgs args)
     {
         OnBatteryValueChanged(args.CharacteristicValue.ToArray());
@@ -136,20 +136,33 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
 
     private void ParseAndForwardInput(byte[] value)
     {
-        if (value.Length < 5) return;
+        // The full report with motion data is 17 bytes long.
+        if (value.Length < 17) return;
 
         var state = new ControllerState
         {
+            // --- Buttons and Stick ---
             ButtonA = (value[1] == 1 || value[1] == 3),
             ButtonB = (value[1] == 2 || value[1] == 3),
             AxisX = GetAnalogX(value[3], value[2]),
-            AxisY = GetAnalogY(value[4])
+            AxisY = GetAnalogY(value[4]),
+
+            // --- Gyroscope ---
+            GyroX = GetGyroData(value[6], value[5]),
+            GyroY = GetGyroData(value[8], value[7]),
+            GyroZ = GetGyroData(value[10], value[9]),
+
+            // --- Accelerometer ---
+            AccelX = GetAccelData(value[12], value[11]),
+            AccelY = GetAccelData(value[14], value[13]),
+            AccelZ = GetAccelData(value[16], value[15])
         };
 
         StateUpdated?.Invoke(this, state);
     }
 
-    #region Axis Mapping Logic
+    #region Data Parsing Logic
+
     private static float MapAxisValue(float value, float a1, float a2, float b1, float b2)
     {
         value = Math.Clamp(value, a1, a2);
@@ -165,9 +178,76 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
 
     private static float GetAnalogY(byte value)
     {
+        // Inverting the axis to match standard controller behavior (up is positive)
         float analogValue = MapAxisValue(value, AxisRawMinY, AxisRawMaxY, 1f, -1f);
         return Math.Abs(analogValue) < AnalogDeadzone ? 0f : analogValue;
     }
+
+    /// <summary>
+    /// Decodes raw gyroscope data from two bytes.
+    /// </summary>
+    /// <remarks>
+    /// This is a C# translation of the logic from the C++ 'Lighthouse' project.
+    /// The data format is custom.
+    /// </remarks>
+    private static float GetGyroData(byte firstByte, byte secondByte)
+    {
+        // The high 4 bits of the first byte determine the sign.
+        // If the most significant bit is 0 (value < 8), the number is negative.
+        // If the most significant bit is 1 (value >= 8), the number is positive.
+        byte firstNibble = (byte)(firstByte >> 4 & 0x0F);
+        float sign = (firstNibble < 8) ? -1f : 1f;
+
+        // The second byte represents the fractional part of the value.
+        float subDeg = secondByte / 100f;
+        float magnitude;
+
+        if (sign > 0) // Positive value
+        {
+            // For positive values, the magnitude is calculated by inverting the first byte.
+            byte difference = (byte)(0xFF - firstByte);
+            magnitude = (difference == 0x00) ? 0 : (difference + subDeg);
+        }
+        else // Negative value
+        {
+            // For negative values, the magnitude is the first byte itself.
+            magnitude = (firstByte == 0xFF) ? 0 : (firstByte + subDeg);
+        }
+
+        return magnitude * sign;
+    }
+
+    /// <summary>
+    /// Decodes raw accelerometer data from two bytes.
+    /// </summary>
+    /// <remarks>
+    /// This is a C# translation of the logic from the C++ 'Lighthouse' project.
+    /// The logic is identical to GetGyroData, but with a final scaling factor.
+    /// </remarks>
+    private static float GetAccelData(byte firstByte, byte secondByte)
+    {
+        // The sign determination is identical to the gyroscope.
+        byte firstNibble = (byte)(firstByte >> 4 & 0x0F);
+        float sign = (firstNibble < 8) ? -1f : 1f;
+
+        // The second byte is the fractional part.
+        float subG = secondByte / 100f;
+        float magnitude;
+
+        if (sign > 0) // Positive value
+        {
+            byte difference = (byte)(0xFF - firstByte);
+            magnitude = (difference == 0x00) ? 0 : (difference + subG);
+        }
+        else // Negative value
+        {
+            magnitude = (firstByte == 0xFF) ? 0 : (firstByte + subG);
+        }
+
+        // The final value is scaled by dividing by 16 and then applying the sign.
+        return (magnitude / 16.0f) * sign;
+    }
+
     #endregion
 
     public void Dispose()

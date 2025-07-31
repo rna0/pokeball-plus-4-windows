@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
@@ -23,6 +24,8 @@ public sealed class PokeballVigemDriver : IDisposable
     private readonly Dictionary<ulong, IController> _controllers = new();
     private readonly Dictionary<ulong, VigemMapper> _mappers = new();
     private readonly Dictionary<ulong, ControllerInfo> _controllerInfo = new();
+    private readonly Dictionary<ulong, ControllerState> _latestStates = new();
+    private readonly Timer _consolePrintTimer;
     private readonly object _lock = new();
 
     public event Action<DriverStatus>? StatusUpdated;
@@ -31,6 +34,8 @@ public sealed class PokeballVigemDriver : IDisposable
     {
         _vigemClient = new ViGEmClient();
         _watcher = new BluetoothLEAdvertisementWatcher { ScanningMode = BluetoothLEScanningMode.Active };
+        // Set up a timer to call PrintGyroToConsole every 0.2 seconds.
+        _consolePrintTimer = new Timer(PrintGyroToConsole, null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
     }
 
     public void Start()
@@ -40,9 +45,61 @@ public sealed class PokeballVigemDriver : IDisposable
         UpdateStatus();
     }
 
+    private void PrintGyroToConsole(object? state)
+    {
+        lock (_lock)
+        {
+            if (_latestStates.Count == 0) return;
+
+            Debug.WriteLine($"--- Gyroscope Data ({DateTime.Now:HH:mm:ss}) ---");
+
+            foreach (var (address, controllerState) in _latestStates)
+            {
+                var addressHex = address.ToString("X");
+                var shortAddress = addressHex.Length > 4 ? addressHex.Substring(addressHex.Length - 4) : addressHex;
+
+                // Output the raw data first for reference
+                Debug.WriteLine($"Controller ({shortAddress}): " +
+                                $"X: {controllerState.GyroX,8:F2}, " +
+                                $"Y: {controllerState.GyroY,8:F2}, " +
+                                $"Z: {controllerState.GyroZ,8:F2}");
+
+                // --- New logic to determine and print dominant movement ---
+                const float movementThreshold = 8.0f; // Ignore small jitters
+
+                float absX = Math.Abs(controllerState.GyroX);
+                float absY = Math.Abs(controllerState.GyroY);
+                float absZ = Math.Abs(controllerState.GyroZ);
+
+                string dominantMovement = "Still";
+
+                // Check if any movement exceeds the threshold
+                if (absX > movementThreshold || absY > movementThreshold || absZ > movementThreshold)
+                {
+                    // Determine which axis has the largest rotation speed
+                    if (absX >= absY && absX >= absZ) // Pitch is dominant
+                    {
+                        dominantMovement = controllerState.GyroX > 0 ? "Tilting UP" : "Tilting DOWN";
+                    }
+                    else if (absY > absX && absY >= absZ) // Yaw is dominant
+                    {
+                        dominantMovement = controllerState.GyroY > 0 ? "Turning RIGHT" : "Turning LEFT";
+                    }
+                    else // Roll is dominant
+                    {
+                        dominantMovement = controllerState.GyroZ > 0 ? "Banking RIGHT" : "Banking LEFT";
+                    }
+                }
+                
+                Debug.WriteLine($"                  -> Dominant Action: {dominantMovement}");
+            }
+        }
+    }
+
     private void OnAdvertisementReceived(BluetoothLEAdvertisementWatcher sender,
         BluetoothLEAdvertisementReceivedEventArgs args)
     {
+        // Fire-and-forget to avoid blocking the watcher's thread
         _ = HandleAdvertisementReceivedAsync(args);
     }
 
@@ -73,6 +130,8 @@ public sealed class PokeballVigemDriver : IDisposable
             }
 
             var controller = new PokeballController(device);
+            // Subscribe to all controller events
+            controller.StateUpdated += OnControllerStateUpdated;
             controller.Disconnected += OnControllerDisconnected;
             controller.BatteryLevelUpdated += OnBatteryLevelUpdated;
 
@@ -83,15 +142,18 @@ public sealed class PokeballVigemDriver : IDisposable
 
                 lock (_lock)
                 {
+                    // Double-check it wasn't added by a racing thread
                     if (_controllers.ContainsKey(controller.BluetoothAddress))
                     {
                         mapper.Dispose();
+                        // Unsubscribe from all events to prevent memory leaks
+                        controller.StateUpdated -= OnControllerStateUpdated;
                         controller.Disconnected -= OnControllerDisconnected;
                         controller.BatteryLevelUpdated -= OnBatteryLevelUpdated;
                         controller.Dispose();
                         return;
                     }
-                    
+
                     _controllers.Add(controller.BluetoothAddress, controller);
                     _mappers.Add(controller.BluetoothAddress, mapper);
                     _controllerInfo.Add(controller.BluetoothAddress, new ControllerInfo(controller.BluetoothAddress, null));
@@ -112,6 +174,15 @@ public sealed class PokeballVigemDriver : IDisposable
         finally
         {
             UpdateStatus();
+        }
+    }
+
+    private void OnControllerStateUpdated(IController controller, ControllerState state)
+    {
+        lock (_lock)
+        {
+            // Store the latest state for the console print timer
+            _latestStates[controller.BluetoothAddress] = state;
         }
     }
 
@@ -139,9 +210,12 @@ public sealed class PokeballVigemDriver : IDisposable
             }
 
             _controllerInfo.Remove(address);
+            _latestStates.Remove(address); // Remove from our state cache
 
             if (_controllers.Remove(address, out var storedController))
             {
+                // Unsubscribe from all events to prevent memory leaks
+                storedController.StateUpdated -= OnControllerStateUpdated;
                 storedController.Disconnected -= OnControllerDisconnected;
                 storedController.BatteryLevelUpdated -= OnBatteryLevelUpdated;
                 storedController.Dispose();
@@ -181,6 +255,7 @@ public sealed class PokeballVigemDriver : IDisposable
 
     public void Dispose()
     {
+        _consolePrintTimer.Dispose();
         _watcher.Stop();
         _watcher.Received -= OnAdvertisementReceived;
 
@@ -194,12 +269,15 @@ public sealed class PokeballVigemDriver : IDisposable
 
             foreach (var controller in _controllers.Values)
             {
+                // Unsubscribe from all events to prevent memory leaks
+                controller.StateUpdated -= OnControllerStateUpdated;
                 controller.Disconnected -= OnControllerDisconnected;
                 controller.BatteryLevelUpdated -= OnBatteryLevelUpdated;
                 controller.Dispose();
             }
             _controllers.Clear();
             _controllerInfo.Clear();
+            _latestStates.Clear();
         }
 
         _vigemClient.Dispose();
