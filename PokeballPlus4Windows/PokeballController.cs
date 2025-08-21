@@ -46,7 +46,6 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
 
             if (!await SubscribeToInputAsync())
             {
-                Debug.WriteLine($"[{BluetoothAddress:X}] Failed to subscribe to input.");
                 return false;
             }
 
@@ -54,9 +53,8 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
 
             return true;
         }
-        catch (Exception ex)
+        catch
         {
-            Debug.WriteLine($"[{BluetoothAddress:X}] Exception during initialization: {ex.Message}");
             return false;
         }
     }
@@ -110,10 +108,7 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
             await _batteryCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
                 GattClientCharacteristicConfigurationDescriptorValue.Notify);
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[{BluetoothAddress:X}] Failed to subscribe to battery service: {ex.Message}");
-        }
+        catch { }
     }
 
     private void OnInputValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
@@ -130,7 +125,6 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
     {
         if (data.Length <= 0) return;
         var batteryLevel = data[0];
-        Debug.WriteLine($"[{BluetoothAddress:X}] Battery level: {batteryLevel}%");
         BatteryLevelUpdated?.Invoke(this, batteryLevel);
     }
 
@@ -244,8 +238,7 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
             magnitude = (firstByte == 0xFF) ? 0 : (firstByte + subG);
         }
 
-        // The final value is scaled by dividing by 16 and then applying the sign.
-        return (magnitude / 16.0f) * sign;
+        return magnitude * sign;
     }
 
     #endregion
@@ -264,10 +257,7 @@ public sealed class PokeballController(BluetoothLEDevice device) : IController
             if (_inputCharacteristic != null) _inputCharacteristic.ValueChanged -= OnInputValueChanged;
             if (_batteryCharacteristic != null) _batteryCharacteristic.ValueChanged -= OnBatteryValueChanged;
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[{BluetoothAddress:X}] Exception during event unsubscription: {ex.Message}");
-        }
+        catch { }
 
         device.Dispose();
     }

@@ -20,13 +20,14 @@ public sealed class PokeballVigemDriver : IDisposable
 
     private readonly ViGEmClient _vigemClient;
     private readonly BluetoothLEAdvertisementWatcher _watcher;
+    private readonly CemuhookUdpServer _cemuhookUdpServer;
 
     private readonly Dictionary<ulong, IController> _controllers = new();
     private readonly Dictionary<ulong, VigemMapper> _mappers = new();
     private readonly Dictionary<ulong, ControllerInfo> _controllerInfo = new();
-    private readonly Dictionary<ulong, ControllerState> _latestStates = new();
-    private readonly Timer _consolePrintTimer;
     private readonly object _lock = new();
+    private readonly Dictionary<byte, CemuhookPadData> _padStates = new();
+    private readonly Dictionary<byte, byte> _padBatteries = new();
 
     public event Action<DriverStatus>? StatusUpdated;
 
@@ -34,8 +35,8 @@ public sealed class PokeballVigemDriver : IDisposable
     {
         _vigemClient = new ViGEmClient();
         _watcher = new BluetoothLEAdvertisementWatcher { ScanningMode = BluetoothLEScanningMode.Active };
-        // Set up a timer to call PrintGyroToConsole every 0.2 seconds.
-        _consolePrintTimer = new Timer(PrintGyroToConsole, null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
+        _cemuhookUdpServer = new CemuhookUdpServer();
+        _cemuhookUdpServer.Start(GetPadDataForSlot);
     }
 
     public void Start()
@@ -43,57 +44,6 @@ public sealed class PokeballVigemDriver : IDisposable
         _watcher.Received += OnAdvertisementReceived;
         _watcher.Start();
         UpdateStatus();
-    }
-
-    private void PrintGyroToConsole(object? state)
-    {
-        lock (_lock)
-        {
-            if (_latestStates.Count == 0) return;
-
-            Debug.WriteLine($"--- Gyroscope Data ({DateTime.Now:HH:mm:ss}) ---");
-
-            foreach (var (address, controllerState) in _latestStates)
-            {
-                var addressHex = address.ToString("X");
-                var shortAddress = addressHex.Length > 4 ? addressHex.Substring(addressHex.Length - 4) : addressHex;
-
-                // Output the raw data first for reference
-                Debug.WriteLine($"Controller ({shortAddress}): " +
-                                $"X: {controllerState.GyroX,8:F2}, " +
-                                $"Y: {controllerState.GyroY,8:F2}, " +
-                                $"Z: {controllerState.GyroZ,8:F2}");
-
-                // --- New logic to determine and print dominant movement ---
-                const float movementThreshold = 8.0f; // Ignore small jitters
-
-                float absX = Math.Abs(controllerState.GyroX);
-                float absY = Math.Abs(controllerState.GyroY);
-                float absZ = Math.Abs(controllerState.GyroZ);
-
-                string dominantMovement = "Still";
-
-                // Check if any movement exceeds the threshold
-                if (absX > movementThreshold || absY > movementThreshold || absZ > movementThreshold)
-                {
-                    // Determine which axis has the largest rotation speed
-                    if (absX >= absY && absX >= absZ) // Pitch is dominant
-                    {
-                        dominantMovement = controllerState.GyroX > 0 ? "Tilting UP" : "Tilting DOWN";
-                    }
-                    else if (absY > absX && absY >= absZ) // Yaw is dominant
-                    {
-                        dominantMovement = controllerState.GyroY > 0 ? "Turning RIGHT" : "Turning LEFT";
-                    }
-                    else // Roll is dominant
-                    {
-                        dominantMovement = controllerState.GyroZ > 0 ? "Banking RIGHT" : "Banking LEFT";
-                    }
-                }
-                
-                Debug.WriteLine($"                  -> Dominant Action: {dominantMovement}");
-            }
-        }
     }
 
     private void OnAdvertisementReceived(BluetoothLEAdvertisementWatcher sender,
@@ -118,19 +68,15 @@ public sealed class PokeballVigemDriver : IDisposable
             return;
         }
 
-        Debug.WriteLine($"[*] Found Poké Ball Plus ({args.BluetoothAddress:X}). Attempting to connect...");
-
         try
         {
             var device = await BluetoothLEDevice.FromBluetoothAddressAsync(args.BluetoothAddress);
             if (device == null)
             {
-                Debug.WriteLine($"[-] Failed to get device object for {args.BluetoothAddress:X}.");
                 return;
             }
 
             var controller = new PokeballController(device);
-            // Subscribe to all controller events
             controller.StateUpdated += OnControllerStateUpdated;
             controller.Disconnected += OnControllerDisconnected;
             controller.BatteryLevelUpdated += OnBatteryLevelUpdated;
@@ -142,11 +88,9 @@ public sealed class PokeballVigemDriver : IDisposable
 
                 lock (_lock)
                 {
-                    // Double-check it wasn't added by a racing thread
                     if (_controllers.ContainsKey(controller.BluetoothAddress))
                     {
                         mapper.Dispose();
-                        // Unsubscribe from all events to prevent memory leaks
                         controller.StateUpdated -= OnControllerStateUpdated;
                         controller.Disconnected -= OnControllerDisconnected;
                         controller.BatteryLevelUpdated -= OnBatteryLevelUpdated;
@@ -158,38 +102,87 @@ public sealed class PokeballVigemDriver : IDisposable
                     _mappers.Add(controller.BluetoothAddress, mapper);
                     _controllerInfo.Add(controller.BluetoothAddress, new ControllerInfo(controller.BluetoothAddress, null));
                 }
-
-                Debug.WriteLine($"[+] Successfully connected controller: {args.BluetoothAddress:X}");
             }
             else
             {
-                Debug.WriteLine($"[-] Failed to initialize controller: {args.BluetoothAddress:X}");
                 controller.Dispose();
             }
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[ERROR] Exception while connecting to {args.BluetoothAddress:X}: {ex.Message}");
-        }
+        catch { }
         finally
         {
             UpdateStatus();
         }
     }
 
-    private void OnControllerStateUpdated(IController controller, ControllerState state)
+    private CemuhookPadData GetPadDataForSlot(int slot)
     {
         lock (_lock)
         {
-            // Store the latest state for the console print timer
-            _latestStates[controller.BluetoothAddress] = state;
+            if (_padStates.TryGetValue((byte)slot, out var padData))
+            {
+                return padData;
+            }
+            // Return an inactive pad if not present
+            return new CemuhookPadData
+            {
+                padId = (byte)slot,
+                padState = 0,
+                model = 2,
+                connectionType = 1,
+                macAddress = new byte[6] { 0x01, 0x02, 0x03, 0x04, 0x05, (byte)slot },
+                batteryStatus = 0,
+                isActive = 0,
+                axisX = 0,
+                axisY = 0,
+                accelX = 0,
+                accelY = 0,
+                accelZ = 0,
+                gyroX = 0,
+                gyroY = 0,
+                gyroZ = 0,
+                buttons = 0
+            };
+        }
+    }
+
+    private void OnControllerStateUpdated(IController controller, ControllerState state)
+    {
+        var slot = 0; // Always use padId 0 for the first pad for DSU compatibility
+        var battery = _padBatteries.ContainsKey((byte)slot) ? _padBatteries[(byte)slot] : (byte)0x05; // DsBattery.Full
+        // Use a realistic MAC address (example: 4C:B9:9B:F9:E8:5C)
+        var macAddress = new byte[6] { 0x4C, 0xB9, 0x9B, 0xF9, 0xE8, 0x5C };
+        var padData = new CemuhookPadData
+        {
+            padId = (byte)slot,
+            padState = 2, // Connected
+            model = 2, // DS4
+            connectionType = 2, // Bluetooth
+            macAddress = macAddress,
+            batteryStatus = battery,
+            isActive = 1,
+            axisX = state.AxisX,
+            axisY = state.AxisY,
+            accelX = state.AccelX,
+            accelY = state.AccelY,
+            accelZ = state.AccelZ,
+            gyroX = state.GyroX,
+            gyroY = state.GyroY,
+            gyroZ = state.GyroZ,
+            buttons = (ushort)((state.ButtonA ? 1 : 0) | (state.ButtonB ? 2 : 0))
+        };
+        lock (_lock)
+        {
+            _padStates[(byte)slot] = padData;
         }
     }
 
     private void OnBatteryLevelUpdated(IController controller, byte batteryLevel)
     {
+        var slot = (byte)(controller.BluetoothAddress & 0xFF);
         lock (_lock)
         {
+            _padBatteries[slot] = batteryLevel;
             if (_controllerInfo.ContainsKey(controller.BluetoothAddress))
             {
                 _controllerInfo[controller.BluetoothAddress] = new ControllerInfo(controller.BluetoothAddress, batteryLevel);
@@ -200,7 +193,6 @@ public sealed class PokeballVigemDriver : IDisposable
 
     private void OnControllerDisconnected(IController controller)
     {
-        Debug.WriteLine($"[-] Controller disconnected: {controller.BluetoothAddress:X}");
         lock (_lock)
         {
             var address = controller.BluetoothAddress;
@@ -210,11 +202,9 @@ public sealed class PokeballVigemDriver : IDisposable
             }
 
             _controllerInfo.Remove(address);
-            _latestStates.Remove(address); // Remove from our state cache
 
             if (_controllers.Remove(address, out var storedController))
             {
-                // Unsubscribe from all events to prevent memory leaks
                 storedController.StateUpdated -= OnControllerStateUpdated;
                 storedController.Disconnected -= OnControllerDisconnected;
                 storedController.BatteryLevelUpdated -= OnBatteryLevelUpdated;
@@ -255,7 +245,7 @@ public sealed class PokeballVigemDriver : IDisposable
 
     public void Dispose()
     {
-        _consolePrintTimer.Dispose();
+        _cemuhookUdpServer.Dispose();
         _watcher.Stop();
         _watcher.Received -= OnAdvertisementReceived;
 
@@ -277,7 +267,6 @@ public sealed class PokeballVigemDriver : IDisposable
             }
             _controllers.Clear();
             _controllerInfo.Clear();
-            _latestStates.Clear();
         }
 
         _vigemClient.Dispose();
