@@ -46,6 +46,8 @@ Follow these steps to get your Poké Ball Plus working on your PC.
 2.  **Windows 10** (or newer) with Bluetooth support.
 3.  The **ViGEmBus Driver**.
 
+> **⚠️ Note:** ViGEmBus is officially discontinued and no longer receives updates (see the [End of Life Statement](https://docs.nefarius.at/projects/ViGEm/End-of-Life/)). Existing installations still work fine, but if you're on an older version with the built-in auto-updater, you'll want to either reconfigure it or uninstall it to avoid the updater contacting a stale domain. The linked page has full details and a one-click fix tool (Legacinator).
+
 ### Installation & Setup Guide
 
 1.  **Prepare Your System**
